@@ -15,7 +15,7 @@
     "options": {
       "reverseChapters": true,
       "hasLocked": true,
-      "customJs": "$('.krc-wm').remove();\n        $('blockquote').filter((i, el) => /translator.?s?\\s*note/i.test($(el).find('h3').first().text())).remove();"
+      "customJs": "$('.krc-wm').remove();\n        $('.ckb-wrap').remove();\n        $('.epcontent').children().toArray().forEach(el => {\n          const tag = el.tagName ? el.tagName.toLowerCase() : '';\n          if (tag === 'p' || tag === 'script' || tag === 'style') return;\n          const $el = $(el);\n          let inner = $el.html() || '';\n          inner = inner.replace(/<h[1-6][^>]*>([\\s\\S]*?)<\\/h[1-6]>/gi, '<strong>$1</strong>');\n          inner = inner.replace(/<\\/?(p|div|blockquote|section|article)[^>]*>/gi, '');\n          if (/^h[1-6]$/.test(tag)) inner = '<strong>' + inner + '</strong>';\n          $el.replaceWith('<p>' + inner + '</p>');\n        });"
     }
   },
   {
