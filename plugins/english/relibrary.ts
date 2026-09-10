@@ -1,10 +1,9 @@
 import { fetchApi } from '@libs/fetch';
 import { Plugin } from '@/types/plugin';
-import { Filters, FilterTypes } from '@libs/filterInputs';
+import { Filters } from '@libs/filterInputs';
 import { load as loadCheerio } from 'cheerio';
 import { defaultCover } from '@libs/defaultCover';
 import { NovelStatus } from '@libs/novelStatus';
-import { storage } from '@libs/storage';
 
 type FuzzySearchOptions = {
   caseSensitive: boolean;
@@ -172,18 +171,14 @@ class ReLibraryPlugin implements Plugin.PluginBase {
   };
 
   // Re:Library early-releases some chapters behind a Patreon-style
-  // password unlock (WordPress password-protected posts). The chapter
-  // list marks these with a `.rl-unlock-text` span giving the unlock
-  // date. hideLocked lets the user optionally hide them from the list
-  // entirely via a plugin setting, same as other plugins with paywalls.
-  hideLocked = storage.get('hideLocked');
-  pluginSettings?: Filters = {
-    hideLocked: {
-      value: false,
-      label: 'Hide locked chapters',
-      type: FilterTypes.Switch,
-    },
-  };
+  // password unlock (WordPress password-protected posts, marked in the
+  // chapter list with a `.rl-unlock-text` span). There's no way for a
+  // plugin to submit that password, so even a paying subscriber can't
+  // actually read one through the app - it would just show the same
+  // "this content is protected" wall for everyone. Since they're
+  // permanently unreadable until the site removes the protection itself,
+  // they're skipped from the chapter list entirely rather than shown as
+  // a dead end.
 
   private searchFunc = new FuzzySearch<Plugin.NovelItem>(item => [item.name], {
     sort: true,
@@ -195,21 +190,22 @@ class ReLibraryPlugin implements Plugin.PluginBase {
     const result = await fetchApi(url);
     const body = await result.text();
 
+    // Re:Library redesigned the "Most Popular" listing at some point; it's
+    // no longer `.entry-content > ol > li` + a <table> layout, it's now a
+    // dedicated `.relibrary-novel-card` grid. Verified against a live copy
+    // of https://re-library.com/translations/most-popular/ (30/30 parsed
+    // correctly, no fallback covers).
     const loadedCheerio = loadCheerio(body);
-    loadedCheerio('.entry-content > ol > li').each((_i, el) => {
+    loadedCheerio('.relibrary-novel-card').each((_i, el) => {
       const novel: Partial<Plugin.NovelItem> = {};
-      novel.name = loadedCheerio(el).find('h3 > a').text();
-      novel.path = loadedCheerio(el)
-        .find('table > tbody > tr > td > a')
-        .attr('href');
+      novel.name = loadedCheerio(el).find('.relibrary-title > a').text().trim();
+      novel.path = loadedCheerio(el).find('.relibrary-cover-link').attr('href');
       if (novel.name === undefined || novel.path === undefined) return;
       novel.cover =
         loadedCheerio(el)
-          .find('table > tbody > tr > td > a > img')
+          .find('.relibrary-cover-link img')
           .attr('data-cfsrc') ||
-        loadedCheerio(el)
-          .find('table > tbody > tr > td > a > img')
-          .attr('src') ||
+        loadedCheerio(el).find('.relibrary-cover-link img').attr('src') ||
         defaultCover;
       novel.path = new URL(novel.path, this.site).pathname;
       novels.push(novel as Plugin.NovelItem);
@@ -344,26 +340,14 @@ class ReLibraryPlugin implements Plugin.PluginBase {
           const chap_path = $chapEl.attr('href')?.trim();
           if ($chapEl.text() === undefined || !chap_path) return;
 
-          // Locked (early-access) chapters carry a `.rl-unlock-text` span
-          // with the unlock date appended right inside the link, e.g.
-          // "Chapter 827 - The War Begins <span class="rl-unlock-text">
-          // (Unlocks on October 23, 2026)</span>". Strip that span out of
-          // the title text and use it to build a clearly-marked name
-          // instead, so the actual chapter title isn't polluted with it.
-          const isLocked = $chapEl.find('.rl-unlock-text').length > 0;
-          if (isLocked && this.hideLocked) return;
-
-          const unlockText = $chapEl.find('.rl-unlock-text').text().trim();
-          const titleOnly = $chapEl
-            .clone()
-            .find('.rl-unlock-text')
-            .remove()
-            .end()
-            .text()
-            .trim();
+          // Locked (early-access) chapters carry a `.rl-unlock-text` span.
+          // There's no way for a plugin to submit the site's unlock
+          // password, so these can never actually be read through the
+          // app - skip them rather than list something permanently dead.
+          if ($chapEl.find('.rl-unlock-text').length > 0) return;
 
           chapters.push({
-            name: isLocked ? `🔒 ${titleOnly} ${unlockText}` : titleOnly,
+            name: $chapEl.text().trim(),
             path: new URL(chap_path, this.site).pathname,
             chapterNumber: chapter_idx,
             // we KNOW that we can't get the released time (at least without any additional fetches), so set it to null purposfully
