@@ -1,9 +1,10 @@
 import { fetchApi } from '@libs/fetch';
 import { Plugin } from '@/types/plugin';
-import { Filters } from '@libs/filterInputs';
+import { Filters, FilterTypes } from '@libs/filterInputs';
 import { load as loadCheerio } from 'cheerio';
 import { defaultCover } from '@libs/defaultCover';
 import { NovelStatus } from '@libs/novelStatus';
+import { storage } from '@libs/storage';
 
 type FuzzySearchOptions = {
   caseSensitive: boolean;
@@ -170,6 +171,20 @@ class ReLibraryPlugin implements Plugin.PluginBase {
     },
   };
 
+  // Re:Library early-releases some chapters behind a Patreon-style
+  // password unlock (WordPress password-protected posts). The chapter
+  // list marks these with a `.rl-unlock-text` span giving the unlock
+  // date. hideLocked lets the user optionally hide them from the list
+  // entirely via a plugin setting, same as other plugins with paywalls.
+  hideLocked = storage.get('hideLocked');
+  pluginSettings?: Filters = {
+    hideLocked: {
+      value: false,
+      label: 'Hide locked chapters',
+      type: FilterTypes.Switch,
+    },
+  };
+
   private searchFunc = new FuzzySearch<Plugin.NovelItem>(item => [item.name], {
     sort: true,
     caseSensitive: false,
@@ -325,10 +340,30 @@ class ReLibraryPlugin implements Plugin.PluginBase {
         .find('li > a')
         .each((_i2, chap_el) => {
           chapter_idx += 1;
-          const chap_path = loadedCheerio(chap_el).attr('href')?.trim();
-          if (loadedCheerio(chap_el).text() === undefined || !chap_path) return;
+          const $chapEl = loadedCheerio(chap_el);
+          const chap_path = $chapEl.attr('href')?.trim();
+          if ($chapEl.text() === undefined || !chap_path) return;
+
+          // Locked (early-access) chapters carry a `.rl-unlock-text` span
+          // with the unlock date appended right inside the link, e.g.
+          // "Chapter 827 - The War Begins <span class="rl-unlock-text">
+          // (Unlocks on October 23, 2026)</span>". Strip that span out of
+          // the title text and use it to build a clearly-marked name
+          // instead, so the actual chapter title isn't polluted with it.
+          const isLocked = $chapEl.find('.rl-unlock-text').length > 0;
+          if (isLocked && this.hideLocked) return;
+
+          const unlockText = $chapEl.find('.rl-unlock-text').text().trim();
+          const titleOnly = $chapEl
+            .clone()
+            .find('.rl-unlock-text')
+            .remove()
+            .end()
+            .text()
+            .trim();
+
           chapters.push({
-            name: loadedCheerio(chap_el).text(),
+            name: isLocked ? `🔒 ${titleOnly} ${unlockText}` : titleOnly,
             path: new URL(chap_path, this.site).pathname,
             chapterNumber: chapter_idx,
             // we KNOW that we can't get the released time (at least without any additional fetches), so set it to null purposfully
