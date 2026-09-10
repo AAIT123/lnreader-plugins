@@ -1,6 +1,6 @@
 import { fetchApi } from '@libs/fetch';
 import { Plugin } from '@/types/plugin';
-import { Filters } from '@libs/filterInputs';
+import { Filters, FilterTypes } from '@libs/filterInputs';
 import { CheerioAPI, load as loadCheerio } from 'cheerio';
 import { defaultCover } from '@libs/defaultCover';
 
@@ -9,13 +9,137 @@ const pluginHeaders = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
 };
 
+// Genre and Year are each their own browse path on the site (e.g.
+// readfrom.net/fantasy/page/2/, readfrom.net/2015/page/2/) rather than
+// combinable query params, so they're modeled as single-select Pickers
+// rather than checkboxes. Verified against the site's own "Top Genres" /
+// "Search by Year" sidebar links.
+const genreOptions = [
+  { label: 'All', value: '' },
+  { label: 'Romance', value: 'romance' },
+  { label: 'Fiction', value: 'fiction' },
+  { label: 'Fantasy', value: 'fantasy' },
+  { label: 'Young Adult', value: 'young-adult' },
+  { label: 'Contemporary', value: 'contemporary' },
+  { label: 'Mystery & Thrillers', value: 'mystery-thrillers' },
+  { label: 'Science Fiction & Fantasy', value: 'science-fiction-fantasy' },
+  { label: 'Paranormal', value: 'paranormal' },
+  { label: 'Historical Fiction', value: 'historical-fiction' },
+  { label: 'Mystery', value: 'mystery' },
+  { label: 'Science Fiction', value: 'science-fiction' },
+  { label: 'Literature & Fiction', value: 'literature-fiction' },
+  { label: 'Thriller', value: 'thriller' },
+  { label: 'Horror', value: 'horror' },
+  { label: 'Suspense', value: 'suspense' },
+  { label: 'Non-fiction', value: 'non-fiction' },
+  { label: "Children's Books", value: 'children-s-books' },
+  { label: 'Historical', value: 'historical' },
+  { label: 'History', value: 'history' },
+  { label: 'Crime', value: 'crime' },
+  { label: 'Ebooks', value: 'ebooks' },
+  { label: "Children's", value: 'children-s' },
+  { label: 'Chick Lit', value: 'chick-lit' },
+  { label: 'Short Stories', value: 'short-stories' },
+  { label: 'Nonfiction', value: 'nonfiction' },
+  { label: 'Humor', value: 'humor' },
+  { label: 'Poetry', value: 'poetry' },
+  { label: 'Erotica', value: 'erotica' },
+  { label: 'Humor and Comedy', value: 'humor-and-comedy' },
+  { label: 'Classics', value: 'classics' },
+  { label: 'Gay and Lesbian', value: 'gay-and-lesbian' },
+  { label: 'Biography', value: 'biography' },
+  { label: 'Childrens', value: 'childrens' },
+  { label: 'Memoir', value: 'memoir' },
+  { label: 'Adult Fiction', value: 'adult-fiction' },
+  { label: 'Biographies & Memoirs', value: 'biographies-memoirs' },
+  { label: 'New Adult', value: 'new-adult' },
+  { label: 'Gay & Lesbian', value: 'gay-lesbian' },
+  { label: 'Womens Fiction', value: 'womens-fiction' },
+  { label: 'Science', value: 'science' },
+  { label: 'Historical Romance', value: 'historical-romance' },
+  { label: 'Cultural', value: 'cultural' },
+  { label: 'Vampires', value: 'vampires' },
+  { label: 'Urban Fantasy', value: 'urban-fantasy' },
+  { label: 'Sports', value: 'sports' },
+  { label: 'Religion & Spirituality', value: 'religion-spirituality' },
+  { label: 'Paranormal Romance', value: 'paranormal-romance' },
+  { label: 'Dystopia', value: 'dystopia' },
+  { label: 'Politics', value: 'politics' },
+  { label: 'Travel', value: 'travel' },
+  { label: 'Christian Fiction', value: 'christian-fiction' },
+  { label: 'Philosophy', value: 'philosophy' },
+  { label: 'Religion', value: 'religion' },
+  { label: 'Autobiography', value: 'autobiography' },
+  { label: 'M M Romance', value: 'm-m-romance' },
+  { label: 'Cozy Mystery', value: 'cozy-mystery' },
+  { label: 'Adventure', value: 'adventure' },
+  { label: 'Comics & Graphic Novels', value: 'comics-graphic-novels' },
+  { label: 'Business', value: 'business' },
+  { label: 'Polyamorous', value: 'polyamorous' },
+  { label: 'Reverse Harem', value: 'reverse-harem' },
+  { label: 'War', value: 'war' },
+  { label: 'Writing', value: 'writing' },
+  { label: 'Self Help', value: 'self-help' },
+  { label: 'Music', value: 'music' },
+  { label: 'Art', value: 'art' },
+  { label: 'Language', value: 'language' },
+  { label: 'Westerns', value: 'westerns' },
+  { label: 'BDSM', value: 'bdsm' },
+  { label: 'Middle Grade', value: 'middle-grade' },
+  { label: 'Western', value: 'western' },
+  { label: 'Psychology', value: 'psychology' },
+  { label: 'Comics', value: 'comics' },
+  { label: 'Romantic Suspense', value: 'romantic-suspense' },
+  { label: 'Shapeshifters', value: 'shapeshifters' },
+  { label: 'Spirituality', value: 'spirituality' },
+  { label: 'Picture Books', value: 'picture-books' },
+  { label: 'Holiday', value: 'holiday' },
+  { label: 'Animals', value: 'animals' },
+  { label: 'Anthologies', value: 'anthologies' },
+  { label: 'Menage', value: 'menage' },
+  { label: 'Zombies', value: 'zombies' },
+  { label: 'Realistic Fiction', value: 'realistic-fiction' },
+  { label: 'Reference', value: 'reference' },
+  { label: 'LGBT', value: 'lgbt' },
+  { label: 'Lesbian Fiction', value: 'lesbian-fiction' },
+  { label: 'Food and Drink', value: 'food-and-drink' },
+  { label: 'Mystery Thriller', value: 'mystery-thriller' },
+  { label: 'Outdoors & Nature', value: 'outdoors-nature' },
+  { label: 'Christmas', value: 'christmas' },
+  { label: 'Sequential Art', value: 'sequential-art' },
+  { label: 'Novels', value: 'novels' },
+  { label: 'Military Fiction', value: 'military-fiction' },
+] as const;
+
+const yearOptions = [
+  { label: 'All', value: '' },
+  { label: '1977 and earlier', value: '1977' },
+  ...Array.from({ length: 2026 - 1978 + 1 }, (_, i) => {
+    const year = String(1978 + i);
+    return { label: year, value: year };
+  }),
+] as const;
+
 class ReadFromPlugin implements Plugin.PluginBase {
   id = 'readfrom';
   name = 'Read From Net';
   icon = 'src/en/readfrom/icon.png';
   site = 'https://readfrom.net/';
-  version = '1.1.0';
-  filters: Filters | undefined = undefined;
+  version = '1.2.0';
+  filters = {
+    genre: {
+      type: FilterTypes.Picker,
+      label: 'Genre',
+      value: '',
+      options: genreOptions,
+    },
+    year: {
+      type: FilterTypes.Picker,
+      label: 'Year',
+      value: '',
+      options: yearOptions,
+    },
+  } satisfies Filters;
   headers = new Headers(pluginHeaders);
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: pluginHeaders,
@@ -85,10 +209,26 @@ class ReadFromPlugin implements Plugin.PluginBase {
 
   async popularNovels(
     pageNo: number,
-    { showLatestNovels }: Plugin.PopularNovelsOptions<typeof this.filters>,
+    {
+      showLatestNovels,
+      filters,
+    }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ) {
-    const type = showLatestNovels ? 'last_added_books' : 'allbooks';
-    const res = await fetchApi(this.site + type + '/page/' + pageNo, {
+    // Genre and Year are separate browse paths on the site (not combinable
+    // query params), so when either is set it replaces the normal
+    // allbooks/last_added_books toggle entirely. Genre takes priority if
+    // both somehow end up set, since there's no evidence the site supports
+    // a combined genre+year path.
+    let basePath: string;
+    if (filters?.genre?.value) {
+      basePath = filters.genre.value;
+    } else if (filters?.year?.value) {
+      basePath = filters.year.value;
+    } else {
+      basePath = showLatestNovels ? 'last_added_books' : 'allbooks';
+    }
+
+    const res = await fetchApi(`${this.site}${basePath}/page/${pageNo}`, {
       headers: this.headers,
     });
     const text = await res.text();
