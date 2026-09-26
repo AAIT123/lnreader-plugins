@@ -4,7 +4,7 @@
 
 name: Report Issue
 description: Report a plugin issue in LNReader
-labels: [Bug]
+labels: [bug]
 body:
   - type: dropdown
     id: source
@@ -57,6 +57,7 @@ body:
         - "English: Crimson Scrolls"
         - "English: Daoist Quest"
         - "English: DaoNovel"
+        - "English: DaoTekno"
         - "English: DaoTranslate"
         - "English: Divine Dao Library"
         - "English: Dearest Rosalie"
@@ -73,6 +74,7 @@ body:
         - "English: Fans Translations"
         - "English: Fenrir Realm"
         - "English: Fiction Zone"
+        - "English: Firebird's Nest"
         - "English: Foxaholic"
         - "English: Foxteller"
         - "English: FuckNovelpia"
@@ -128,6 +130,7 @@ body:
         - "English: Novel Bin"
         - "English: NovelBuddy"
         - "English: NovelCool"
+        - "English: NovelDex"
         - "English: Novel Fire"
         - "English: NovelFull"
         - "English: Novel Hall"
@@ -167,6 +170,7 @@ body:
         - "English: StorySeedling"
         - "English: Sweet Escape"
         - "English: System Translation"
+        - "English: Tangerine Archive"
         - "English: TranslatinOtaku"
         - "English: Translation Weaver"
         - "English: Universal Novel"
@@ -289,6 +293,7 @@ body:
         - "Tiếng Việt: Light Novel VN"
         - "Tiếng Việt: Hako"
         - "Tiếng Việt: Nettruyen"
+        - "Tiếng Việt: TruyenDich"
         - "Tiếng Việt: TruyenSS"
         - "Multi: Komga"
     validations:

@@ -3,22 +3,198 @@ import { fetchApi } from '@libs/fetch';
 import { FilterTypes, Filters } from '@libs/filterInputs';
 import { CheerioAPI, load as parseHTML } from 'cheerio';
 import { gcm } from '@libs/aes';
+import { storage } from '@libs/storage';
 
 class WTRLAB implements Plugin.PluginBase {
   id = 'WTRLAB';
   name = 'WTR-LAB';
   site = 'https://wtr-lab.com/';
-  version = '1.1.6';
+  version = '1.2.1';
   icon = 'src/en/wtrlab/icon.png';
   sourceLang = 'en/';
   baggage = '';
   trace = '';
 
+  pluginSettings = {
+    signInUrl: {
+      value: '',
+      label:
+        'Sign-in link — request "Continue with Email" on wtr-lab, then paste the full link from that email here (the plugin reads the token out of it and redeems it). Clear this field once AI chapters load; links are single-use and short-lived.',
+      type: 'Text',
+    },
+    sessionCookie: {
+      value: '',
+      label:
+        'Session cookie (fallback) — usually leave EMPTY. Android replaces this header with its own stored cookies whenever it has any, so the sign-in link above is the reliable route.',
+      type: 'Text',
+    },
+    preferredMode: {
+      value: 'ai',
+      label: 'Preferred translation',
+      type: 'Select',
+      options: [
+        { label: 'AI', value: 'ai' },
+        { label: 'Web+', value: 'webplus' },
+        { label: 'Web', value: 'web' },
+        { label: 'Custom — set the id below', value: 'custom' },
+      ],
+    },
+    customMode: {
+      value: '',
+      label:
+        'Custom translation id — only used when "Custom" is selected above. This is the value wtr-lab sends as "translate" in its /api/reader/get request.',
+      type: 'Text',
+    },
+    fallbackToWeb: {
+      value: true,
+      label: 'Fall back to Web when the preferred translation is unavailable',
+      type: 'Switch',
+    },
+    showModeNotice: {
+      value: true,
+      label: 'Show which translation was used at the top of each chapter',
+      type: 'Switch',
+    },
+  };
+
+  /** Full Cookie header value supplied by the user in plugin settings. */
+  get sessionCookie(): string {
+    return (storage.get<string>('sessionCookie') || '').trim();
+  }
+
+  /** Only attempt the sign-in link once per app run: the links are single-use. */
+  signInAttempted = false;
+
+  /**
+   * Visits the user's emailed sign-in link once. Any Set-Cookie it returns is
+   * stored by Android's shared cookie jar, which every later request uses
+   * automatically — unlike a Cookie header, which the jar overrides.
+   *
+   * @returns a short status line to show the user, or null if nothing was tried.
+   */
+  async ensureSignedIn(): Promise<string | null> {
+    const raw = (storage.get<string>('signInUrl') || '').trim();
+    if (!raw || this.signInAttempted) return null;
+    this.signInAttempted = true;
+
+    // A full URL must be wtr-lab's own; a bare token is accepted too.
+    if (
+      /^[a-z]+:\/\//i.test(raw) &&
+      !/^https:\/\/([a-z0-9-]+\.)*wtr-lab\.com\//i.test(raw)
+    ) {
+      return 'Sign-in link ignored — it is not an https wtr-lab.com address.';
+    }
+
+    // The emailed link points at a PAGE whose JavaScript redeems the token.
+    // Nothing runs that script here, so pull the token out and call the
+    // redeem endpoint directly.
+    let token = '';
+    const fromQuery = raw.match(/[?&]token=([^&\s]+)/);
+    if (fromQuery) {
+      token = decodeURIComponent(fromQuery[1]);
+    } else if (/^[A-Za-z0-9_.-]{16,}$/.test(raw)) {
+      token = raw;
+    }
+
+    if (!token) {
+      return 'Sign-in link ignored — no token found. Paste the whole link from the email (it contains "token=").';
+    }
+
+    const verifyUrl = `${this.site}api/auth/magic-link/verify?token=${encodeURIComponent(
+      token,
+    )}&callbackURL=/`;
+
+    try {
+      const res = await fetchApi(verifyUrl, {
+        headers: {
+          'Accept': 'application/json,text/html,*/*',
+          'Referer': this.site,
+        },
+      });
+      const landedOn = (res.url || '').replace(this.site, '/') || 'unknown';
+      return `Sign-in: redeem token HTTP ${res.status}, ended at ${landedOn}`;
+    } catch (e) {
+      return `Sign-in failed: ${String(e)}`;
+    }
+  }
+
+  /**
+   * Asks wtr-lab who it thinks we are. This is the ground truth for whether a
+   * session actually survived into the plugin's requests.
+   */
+  async checkSession(): Promise<string> {
+    try {
+      const cookie = this.sessionCookie;
+      const res = await fetchApi(`${this.site}api/auth/get-session`, {
+        headers: {
+          'Accept': 'application/json',
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+      });
+      const text = await res.text();
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch (e) {
+        body = null;
+      }
+      // wtr-lab nests this differently in places, so check the likely shapes.
+      const user =
+        body?.user ||
+        body?.session?.user ||
+        body?.data?.user ||
+        body?.session?.session?.user;
+      if (typeof user === 'string' && user) {
+        return `signed in (${user})`;
+      }
+      if (user && typeof user === 'object') {
+        const label =
+          user.user_name ||
+          user.name ||
+          user.username ||
+          user.email ||
+          user.id ||
+          '';
+        return label ? `signed in as ${label}` : 'signed in';
+      }
+      return `NOT signed in (get-session HTTP ${res.status}: ${
+        text
+          .slice(0, 60)
+          .replace(/<[^>]*>/g, ' ')
+          .trim() || 'empty response'
+      })`;
+    } catch (e) {
+      return `session check failed: ${String(e)}`;
+    }
+  }
+
+  /** Translation modes to try, in order, based on plugin settings. */
+  get translationModes(): string[] {
+    const preferred = (storage.get<string>('preferredMode') || 'ai').trim();
+    const custom = (storage.get<string>('customMode') || '').trim();
+    const fallback = storage.get<boolean>('fallbackToWeb');
+
+    const modes: string[] = [];
+    if (preferred === 'custom') {
+      if (custom) modes.push(custom);
+    } else if (preferred) {
+      modes.push(preferred);
+    }
+
+    // `false` means the user turned it off; `undefined` means never set, so default to on.
+    if (fallback !== false && !modes.includes('web')) modes.push('web');
+    if (modes.length === 0) modes.push('web');
+
+    return modes;
+  }
+
   get headers(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       baggage: this.baggage,
       'sentry-trace': this.trace,
     };
+    if (this.sessionCookie) headers.Cookie = this.sessionCookie;
+    return headers;
   }
 
   async popularNovels(
@@ -230,85 +406,47 @@ class WTRLAB implements Plugin.PluginBase {
         loadedCheerio('.lead').text().trim();
     }
 
-    const genres =
-      loadedCheerio('td:contains("Genre")')
-        .next()
-        .find('a')
-        .map((i, el) =>
-          loadedCheerio(el)
-            .text()
-            .replace(/<!--.*?-->/g, '')
-            .trim(),
-        )
-        .toArray() ||
-      loadedCheerio('.genre')
-        .map((i, el) =>
-          loadedCheerio(el)
-            .text()
-            .replace(/<!--.*?-->/g, '')
-            .trim(),
-        )
-        .toArray() ||
-      loadedCheerio('.genres .genre')
-        .map((i, el) =>
-          loadedCheerio(el)
-            .text()
-            .replace(/<!--.*?-->/g, '')
-            .trim(),
-        )
-        .toArray();
+    // Genres and tags live in __NEXT_DATA__ as numeric ids, not in the page
+    // markup. Tag names are served already resolved in pageProps.tags; genre
+    // names appear only as the text of their chip links.
+    const labels: string[] = [];
 
-    if (genres.length > 0) {
-      novel.genres = genres
-        .map(g => g.replace(/,$/, '').trim())
-        .filter(genre => genre && genre.length > 0)
-        .join(', ');
+    if (nextDataText) {
+      try {
+        const tagData = JSON.parse(nextDataText);
+        const pageProps = tagData?.props?.pageProps;
+        const ids: number[] = pageProps?.serie?.serie_data?.genres || [];
+
+        const genreNames = new Map<number, string>();
+        loadedCheerio('a[href*="novel-list?genre="]').each((i, el) => {
+          const href = loadedCheerio(el).attr('href') || '';
+          const matched = href.match(/genre=(\d+)/);
+          const name = loadedCheerio(el).text().trim();
+          if (matched && name) genreNames.set(parseInt(matched[1], 10), name);
+        });
+
+        for (const id of ids) {
+          const name = genreNames.get(id);
+          if (name) {
+            labels.push(name.charAt(0).toUpperCase() + name.slice(1));
+          }
+        }
+
+        if (Array.isArray(pageProps?.tags)) {
+          for (const tag of pageProps.tags) {
+            const title = tag?.title && String(tag.title).trim();
+            if (title) labels.push(title);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to read genres/tags from __NEXT_DATA__:', error);
+      }
     }
 
-    const tags =
-      loadedCheerio('td:contains("Tags")')
-        .next()
-        .find('a')
-        .map((i, el) =>
-          loadedCheerio(el)
-            .text()
-            .replace(/<!--.*?-->/g, '')
-            .replace(/,$/, '')
-            .trim(),
-        )
-        .toArray() ||
-      loadedCheerio('.tag')
-        .map((i, el) =>
-          loadedCheerio(el)
-            .text()
-            .replace(/<!--.*?-->/g, '')
-            .replace(/,$/, '')
-            .trim(),
-        )
-        .toArray() ||
-      loadedCheerio('.tags .tag')
-        .map((i, el) =>
-          loadedCheerio(el)
-            .text()
-            .replace(/<!--.*?-->/g, '')
-            .replace(/,$/, '')
-            .trim(),
-        )
-        .toArray();
-
-    // console.log('Found tags from HTML:', tags);
-
-    if (tags.length > 0) {
-      const existingGenres = novel.genres ? novel.genres.split(', ') : [];
-      // console.log('Existing genres:', existingGenres);
-      const allGenres = [...existingGenres, ...tags].filter(
-        genre => genre && genre.length > 0,
-      );
-      const uniqueGenres = allGenres.filter(
-        (genre, index) => allGenres.indexOf(genre) === index,
-      );
-      novel.genres = uniqueGenres.join(', ');
-      // console.log('Combined genres:', novel.genres);
+    if (labels.length > 0) {
+      novel.genres = labels
+        .filter((label, index) => labels.indexOf(label) === index)
+        .join(', ');
     }
 
     if (!novel.author) {
@@ -539,10 +677,16 @@ class WTRLAB implements Plugin.PluginBase {
       throw new Error(errorMsg);
     }
 
-    const translationTypes = ['ai', 'web'];
+    const translationTypes = this.translationModes;
+    const cookie = this.sessionCookie;
 
-    let eLog = '';
+    const attemptLog: string[] = [];
     let parsedJson;
+    let usedType: string | null = null;
+
+    // Establish a session from the emailed link before asking for a chapter.
+    const signInNote = await this.ensureSignedIn();
+    if (signInNote) attemptLog.push(signInNote);
 
     for (const type of translationTypes) {
       const apiResponse = await fetchApi(`${this.site}api/reader/get`, {
@@ -550,6 +694,7 @@ class WTRLAB implements Plugin.PluginBase {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          ...(cookie ? { Cookie: cookie } : {}),
         },
         referrer: url,
         body: JSON.stringify({
@@ -562,26 +707,76 @@ class WTRLAB implements Plugin.PluginBase {
         }),
       });
 
-      parsedJson = await apiResponse.json();
-      if (!apiResponse.ok) {
-        if (parsedJson.error) {
-          eLog = parsedJson.error;
-          continue;
-        }
-      } else if (!parsedJson.error) {
-        break;
+      // Read as text first: an auth redirect or a Cloudflare challenge returns
+      // HTML, and .json() would throw before we could report what came back.
+      const rawBody = await apiResponse.text();
+      let candidate = null;
+      try {
+        candidate = JSON.parse(rawBody);
+      } catch (e) {
+        candidate = null;
       }
+
+      if (!candidate) {
+        attemptLog.push(
+          `"${type}": HTTP ${apiResponse.status} — response was not JSON: ${rawBody
+            .slice(0, 150)
+            .replace(/<[^>]*>/g, ' ')
+            .trim()}`,
+        );
+        continue;
+      }
+
+      parsedJson = candidate;
+
+      if (!apiResponse.ok) {
+        attemptLog.push(
+          `"${type}": HTTP ${apiResponse.status}${
+            candidate.error ? ' — ' + candidate.error : ''
+          }${candidate.message ? ' — ' + candidate.message : ''}`,
+        );
+        continue;
+      }
+      if (candidate.error) {
+        attemptLog.push(`"${type}": ${candidate.error}`);
+        continue;
+      }
+      if (candidate.success === false) {
+        attemptLog.push(
+          `"${type}": ${candidate.message || 'request was not successful'}`,
+        );
+        continue;
+      }
+
+      usedType = type;
+      break;
     }
-    if (parsedJson.success == false) {
-      const errorMsg = parsedJson.message;
+
+    const showNotice = storage.get<boolean>('showModeNotice') !== false;
+    const cookieState = showNotice
+      ? await this.checkSession()
+      : cookie
+        ? `session cookie sent (${cookie.length} chars)`
+        : 'no session cookie set';
+
+    if (!usedType || !parsedJson?.data?.data) {
+      const errorMsg =
+        `None of the requested translations could be loaded [${cookieState}]. ` +
+        (attemptLog.length
+          ? attemptLog.join(' | ')
+          : 'The server returned no usable response.');
       console.error(errorMsg);
       throw new Error(errorMsg);
     }
-    let chapterContent = parsedJson.data.data.body;
+    let chapterContent: any = parsedJson.data.data.body;
+    const chapterTitle: string | undefined = parsedJson?.chapter?.title;
     const chapterGlossary: ChapterContent['glossary_data'] | undefined =
       parsedJson?.data?.data?.glossary_data;
 
     let htmlString = '';
+    if (chapterTitle) {
+      htmlString += `<h3>${chapterTitle}</h3>`;
+    }
 
     if (
       chapterContent.toString().startsWith('arr:') ||
@@ -599,11 +794,17 @@ class WTRLAB implements Plugin.PluginBase {
         return htmlString;
       }
       chapterContent = await this.translate(chapterContent);
-      htmlString += `<p><small>This is being translated from your device via google translate (source's method) - Login via web view to try for ai translations</small></p>`;
+      usedType = `${usedType} + Google Translate (on-device)`;
     }
 
-    if (eLog !== '') {
-      htmlString += `<p style="color:darkred;">${eLog}</p>`;
+    if (storage.get<boolean>('showModeNotice') !== false && usedType) {
+      htmlString += `<p><small>Translation: ${usedType} — ${cookieState}</small></p>`;
+    }
+
+    if (attemptLog.length) {
+      htmlString += `<p style="color:darkred;"><small>Skipped: ${attemptLog.join(
+        ' | ',
+      )}</small></p>`;
     }
 
     const dictionary = chapterGlossary?.terms?.map(t => t[0]) || [];
