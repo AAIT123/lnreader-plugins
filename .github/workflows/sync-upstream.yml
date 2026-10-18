@@ -1,0 +1,45 @@
+
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '23 6 * * 0' # Every Sunday at 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-master
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: github.repository == 'AAIT123/lnreader-plugins'
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/lnreader/lnreader-plugins.git
+          git fetch upstream master
+
+      - name: Merge upstream
+        run: |
+          git merge --no-edit upstream/master
+
+      - name: Push changes
+        run: |
+          git push origin HEAD:master
