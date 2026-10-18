@@ -18,6 +18,8 @@ type MadaraOptions = {
   versionIncrements?: number;
   customJs?: string;
   hasLocked?: boolean;
+  browserHeaders?: boolean;
+  resolveCoverDataUri?: boolean;
 };
 
 export type MadaraMetadata = {
@@ -59,6 +61,18 @@ export class MadaraPlugin implements Plugin.PluginBase {
         },
       };
     }
+  }
+
+  // Opt-in for sites whose bot check rejects fetchApi's wildcard Accept
+  // headers (e.g. lovelyblossoms.com, see #2599). The app's User-Agent is
+  // left untouched so WebView clearance cookies still match.
+  get requestHeaders(): Record<string, string> | undefined {
+    if (!this.options?.browserHeaders) return undefined;
+    return {
+      'Accept':
+        'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
   }
 
   translateDragontea(text: Cheerio<AnyNode>): Cheerio<AnyNode> {
@@ -107,7 +121,7 @@ export class MadaraPlugin implements Plugin.PluginBase {
   }
 
   async getCheerio(url: string, search: boolean): Promise<CheerioAPI> {
-    const r = await fetchApi(url);
+    const r = await fetchApi(url, { headers: this.requestHeaders });
     if (!r.ok && search != true)
       throw new Error(
         'Could not reach site (' + r.status + ') try to open in webview.',
@@ -126,6 +140,26 @@ export class MadaraPlugin implements Plugin.PluginBase {
     return $;
   }
 
+  extractCover(image: Cheerio<AnyNode>): string {
+    const candidates = [
+      image.attr('data-lazy-src'),
+      image.attr('data-src'),
+      image.attr('data-cfsrc'),
+      image.attr('data-srcset')?.split(' ')[0],
+      image.attr('data-lazy-srcset')?.split(' ')[0],
+      image.attr('srcset')?.split(' ')[0],
+      image.attr('src'),
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate && !candidate.includes('dflazy')) {
+        return candidate;
+      }
+    }
+
+    return defaultCover;
+  }
+
   parseNovels(loadedCheerio: CheerioAPI): Plugin.NovelItem[] {
     const novels: Plugin.NovelItem[] = [];
 
@@ -141,12 +175,10 @@ export class MadaraPlugin implements Plugin.PluginBase {
           loadedCheerio(element).find('.post-title').find('a').attr('href') ||
           '';
         if (!novelName || !novelUrl) return;
-        const image = loadedCheerio(element).find('img');
-        const novelCover =
-          image.attr('data-src') ||
-          image.attr('src') ||
-          image.attr('data-lazy-srcset') ||
-          defaultCover;
+        const novelCover = this.extractCover(
+          loadedCheerio(element).find('img'),
+        );
+
         const novel: Plugin.NovelItem = {
           name: novelName,
           cover: novelCover,
@@ -156,6 +188,57 @@ export class MadaraPlugin implements Plugin.PluginBase {
       },
     );
 
+    return novels;
+  }
+
+  async resolveCoverAsDataUri(url: string): Promise<string> {
+    if (!url || !url.startsWith('http') || url.startsWith('data:')) return url;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const controller =
+        typeof AbortController !== 'undefined' ? new AbortController() : null;
+      timeout = controller ? setTimeout(() => controller.abort(), 4000) : null;
+      const res = await fetchApi(url, {
+        headers: this.requestHeaders,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (!res.ok) return url;
+      const blob = await res.blob();
+      return await new Promise<string>(resolve => {
+        const FileReaderClass =
+          typeof FileReader !== 'undefined'
+            ? FileReader
+            : (globalThis as any).FileReader;
+        if (!FileReaderClass) return resolve(url);
+        const fr = new FileReaderClass();
+        fr.onloadend = () => {
+          if (typeof fr.result === 'string') {
+            resolve(fr.result);
+          } else {
+            resolve(url);
+          }
+        };
+        fr.onerror = () => resolve(url);
+        fr.readAsDataURL(blob);
+      });
+    } catch {
+      return url;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  async resolveNovelsCovers(
+    novels: Plugin.NovelItem[],
+  ): Promise<Plugin.NovelItem[]> {
+    if (!this.options?.resolveCoverDataUri) return novels;
+    await Promise.all(
+      novels.map(async novel => {
+        if (novel.cover && novel.cover.startsWith('http')) {
+          novel.cover = await this.resolveCoverAsDataUri(novel.cover);
+        }
+      }),
+    );
     return novels;
   }
 
@@ -176,7 +259,8 @@ export class MadaraPlugin implements Plugin.PluginBase {
       else if (filters[key].value) url += `&${key}=${filters[key].value}`;
     }
     const loadedCheerio = await this.getCheerio(url, pageNo != 1);
-    return this.parseNovels(loadedCheerio);
+    const novels = this.parseNovels(loadedCheerio);
+    return await this.resolveNovelsCovers(novels);
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
@@ -192,11 +276,7 @@ export class MadaraPlugin implements Plugin.PluginBase {
         '',
     };
 
-    novel.cover =
-      loadedCheerio('.summary_image > a > img').attr('data-lazy-src') ||
-      loadedCheerio('.summary_image > a > img').attr('data-src') ||
-      loadedCheerio('.summary_image > a > img').attr('src') ||
-      defaultCover;
+    novel.cover = this.extractCover(loadedCheerio('.summary_image > a > img'));
 
     loadedCheerio('.post-content_item, .post-content').each(function () {
       const detailName = loadedCheerio(this).find('h5').text().trim();
@@ -234,6 +314,11 @@ export class MadaraPlugin implements Plugin.PluginBase {
         case 'المؤلف':
         case 'المؤلف (ين)':
           novel.author = detail.text().trim();
+          break;
+        case 'Translator(s)':
+        case 'Translator':
+        case 'Translators':
+          if (!novel.author) novel.author = detail.text().trim();
           break;
         case 'Status':
         case 'Novel':
@@ -286,6 +371,13 @@ export class MadaraPlugin implements Plugin.PluginBase {
         .get()
         .join('\n\n')
         .trim() ||
+      loadedCheerio('.post-content_item h5:contains("Summary")')
+        .next()
+        .find('p')
+        .map((i, el) => loadedCheerio(el).text())
+        .get()
+        .join('\n\n')
+        .trim() ||
       loadedCheerio('.manga-summary p')
         .map((i, el) => loadedCheerio(el).text())
         .get()
@@ -302,6 +394,7 @@ export class MadaraPlugin implements Plugin.PluginBase {
     if (this.options?.useNewChapterEndpoint) {
       html = await fetchApi(this.site + novelPath + 'ajax/chapters/', {
         method: 'POST',
+        headers: this.requestHeaders,
         referrer: this.site + novelPath,
       }).then((res: Response) => res.text());
 
@@ -322,7 +415,11 @@ export class MadaraPlugin implements Plugin.PluginBase {
           for (let page = 2; page <= maxPage; page++) {
             const pageHtml = await fetchApi(
               this.site + novelPath + 'ajax/chapters/' + queryTemplate + page,
-              { method: 'POST', referrer: this.site + novelPath },
+              {
+                method: 'POST',
+                headers: this.requestHeaders,
+                referrer: this.site + novelPath,
+              },
             ).then((res: Response) => res.text());
             if (pageHtml && pageHtml !== '0') html += pageHtml;
           }
@@ -340,6 +437,7 @@ export class MadaraPlugin implements Plugin.PluginBase {
 
       html = await fetchApi(this.site + 'wp-admin/admin-ajax.php', {
         method: 'POST',
+        headers: this.requestHeaders,
         body: formData,
       }).then((res: Response) => res.text());
     }
@@ -415,7 +513,8 @@ export class MadaraPlugin implements Plugin.PluginBase {
       encodeURIComponent(searchTerm) +
       '&post_type=wp-manga';
     const loadedCheerio = await this.getCheerio(url, true);
-    return this.parseNovels(loadedCheerio);
+    const novels = this.parseNovels(loadedCheerio);
+    return await this.resolveNovelsCovers(novels);
   }
 
   parseData = (date: string) => {

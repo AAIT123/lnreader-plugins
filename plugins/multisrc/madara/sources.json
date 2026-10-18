@@ -221,7 +221,9 @@
     "sourceSite": "https://www.foxaholic.com/",
     "sourceName": "Foxaholic",
     "options": {
-      "useNewChapterEndpoint": true
+      "useNewChapterEndpoint": true,
+      "resolveCoverDataUri": true,
+      "versionIncrements": 1
     }
   },
   {
@@ -316,7 +318,8 @@
     "sourceName": "Azora",
     "options": {
       "useNewChapterEndpoint": true,
-      "lang": "Arabic"
+      "lang": "Arabic",
+      "down": true
     }
   },
   {
@@ -407,13 +410,12 @@
   },
   {
     "id": "bellereservoir",
-    "sourceSite": "https://bellereservoir.com/",
-    "sourceName": "Belle Reservoir",
+    "sourceSite": "https://bellerepository.com/",
+    "sourceName": "Belle Repository",
     "options": {
       "useNewChapterEndpoint": true,
       "lang": "English",
-      "down": true,
-      "downSince": 1777153113000
+      "versionIncrements": 1
     }
   },
   {
@@ -552,15 +554,6 @@
     }
   },
   {
-    "id": "WebNovelTraslation",
-    "sourceSite": "https://webnoveltranslations.com/",
-    "sourceName": "Web Novel Translation",
-    "options": {
-      "lang": "English",
-      "useNewChapterEndpoint": true
-    }
-  },
-  {
     "id": "AnimesHoy12",
     "sourceSite": "https://animeshoy12.com/",
     "sourceName": "AnimesHoy12",
@@ -587,15 +580,6 @@
       "lang": "English",
       "useNewChapterEndpoint": true,
       "customJs": "loadedCheerio('img[alt=\"Buy Me a Coffee at ko-fi.com\"]').parent().remove(); loadedCheerio('*').contents().each(function() {if (this.type === 'comment' && this.data.trim() === 'Text Ranovel') {let currentNode = this.next;for (let i = 0; i < 2 && currentNode; i++) {const nextNode = currentNode.next;loadedCheerio(currentNode).remove();currentNode = nextNode;}}});"
-    }
-  },
-  {
-    "id": "dragonholic",
-    "sourceSite": "https://dragonholic.com/",
-    "sourceName": "Dragonholic",
-    "options": {
-      "lang": "English",
-      "useNewChapterEndpoint": true
     }
   },
   {
@@ -671,17 +655,28 @@
     }
   },
   {
-    "id": "hangulplanet",
-    "sourceSite": "https://hangulplanet.com/",
-    "sourceName": "HangulPlanet",
+    "id": "lovelyblossoms",
+    "sourceSite": "https://lovelyblossoms.com/",
+    "sourceName": "Lovelyblossoms",
     "options": {
+      "useNewChapterEndpoint": true,
+      "browserHeaders": true,
+      "versionIncrements": 1
+    }
+  },
+  {
+    "id": "tangerinearchive",
+    "sourceSite": "https://tangerinearchive.com/",
+    "sourceName": "Tangerine Archive",
+    "options": {
+      "lang": "English",
       "useNewChapterEndpoint": true
     }
   },
   {
-    "id": "lovelyblossoms",
-    "sourceSite": "https://lovelyblossoms.com/",
-    "sourceName": "Lovelyblossoms",
+    "id": "bailiantales",
+    "sourceSite": "https://bailiantales.com/",
+    "sourceName": "BaiLianTales",
     "options": {
       "useNewChapterEndpoint": true
     }
